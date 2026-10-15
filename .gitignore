@@ -1,0 +1,8 @@
+/BIOSCAN_5M_cropped_256_eval
+BIOSCAN_5M_Insect_Dataset_metadata_MultiTypes
+*.jpg
+/env
+/__pycache__
+/.vscode
+.vscode/settings.json
+csv/BIOSCAN_5M_Insect_Dataset_metadata.csv
