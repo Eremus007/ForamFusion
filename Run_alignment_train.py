@@ -21,12 +21,11 @@ from C_model import PairedAlignmentModel
 from D_loss import symmetric_info_nce
 
 
-
 class PairedSpecimenDataset(Dataset):
-    """Takes CSV and turns it into paired training examples."""
+    """Takes Manifest CSV and turns it into paired training examples."""
     """One CSV row per specimen with a matched image and DNA sequence."""
 
-    REQUIRED_COLUMNS = {"sample_id", "image_path", "sequence"}
+    REQUIRED_COLUMNS = {"processid", "sampleid", "species", "dna_barcode"}
 
     def __init__(self, manifest_path: str | Path, image_transform, dna_tokenizer):
         self.manifest_path = Path(manifest_path).resolve()                                                  # Resolve CSV path into an absolute path.
@@ -40,7 +39,7 @@ class PairedSpecimenDataset(Dataset):
         if not self.rows:
             raise ValueError(f"No samples found in {self.manifest_path}")
 
-        sample_ids = [row["sample_id"] for row in self.rows]                                                # Creates a list of sample IDs
+        sample_ids = [row["sampleid"] for row in self.rows]                                                # Creates a list of sample IDs
         if len(set(sample_ids)) != len(sample_ids):                                                         # Check for and remove duplicates
             raise ValueError(
                 "This starter version expects one row per unique sample_id. "
@@ -55,16 +54,16 @@ class PairedSpecimenDataset(Dataset):
 
     def __getitem__(self, index):                                                                           # Given an index, how do I retrieve one sample example?
         row = self.rows[index]  
-        image_path = Path(row["image_path"])
+        image_path = Path("./images/"+ row["processid"] + ".jpg")
         if not image_path.is_absolute():
             image_path = self.manifest_path.parent / image_path                                             # Turn absolute paths relative.
 
         with Image.open(image_path) as image:                                                               # Open the image using Pillow.
             image = self.image_transform(image.convert("RGB"))                                              # Ensure the image has three color channels then does the preprocessing for the image encoder.
 
-        sequence = normalize_dna_sequence(row["sequence"])                                                  # Takes the barcode sequence from the csv and runs it through the normalization function. 
+        sequence = normalize_dna_sequence(row["dna_barcode"])                                                  # Takes the barcode sequence from the csv and runs it through the normalization function. 
         if not sequence:
-            raise ValueError(f"Empty DNA sequence for sample {row['sample_id']}")                           # Checks whether the sequence is empty after preprocessing. 
+            raise ValueError(f"Empty DNA sequence for sample {row['sampleid']}")                           # Checks whether the sequence is empty after preprocessing. 
         encoded = self.dna_tokenizer(                                                                       # Passes the sequence into the BarcodeBERT tokenizer.
             sequence,
             padding=True,                                                                                   # Pads sequences when nessesary so they are all the same length. 
@@ -72,7 +71,7 @@ class PairedSpecimenDataset(Dataset):
         )
         input_ids = torch.as_tensor(encoded["input_ids"]).reshape(-1).long()                                # Returns the token IDs after flattening it to a single list in 64-bit integer tensor format. 
         attention_mask = torch.as_tensor(encoded["attention_mask"]).reshape(-1).long()                      # Does something similar for the attention mask as above.
-        return image, input_ids, attention_mask, row["sample_id"]                                           # Returns everything needed from the requested sample. 
+        return image, input_ids, attention_mask, row["sampleid"]                                           # Returns everything needed from the requested sample. 
 
 
 def set_seed(seed: int):
@@ -155,6 +154,7 @@ def train_one_epoch(model, loader, optimizer, device, temperature):
 
 
 def main():
+    # python run_alignment_train.py --train-csv ./data/manifest.csv --output ./alignment.pt
     parser = argparse.ArgumentParser()                                                                      # Arguments coming from the command line.
     parser.add_argument("--train-csv", required=True)
     parser.add_argument("--output", default="alignment.pt")
@@ -165,7 +165,7 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--temperature", type=float, default=0.07)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=42069)
     args = parser.parse_args()                                                                              # Creates an object containing all the command line arguments. 
 
     set_seed(args.seed)                                                                                     # Call the helper function to set the random seed. 

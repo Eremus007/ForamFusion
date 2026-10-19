@@ -30,4 +30,4 @@ def symmetric_info_nce(
     return 0.5 * (image_to_dna + dna_to_image)                                                          # We take the average of the loss of both directions which is our actual loss.  
 
 if __name__ == "__main__":
-    pass
+    print("This file holds the function for the infoNCE loss, please run either 'Run_alignment_train.py' for training or 'Run_evaluation.py' for evaluation of a previously trained model.")

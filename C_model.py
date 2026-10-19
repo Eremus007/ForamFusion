@@ -89,4 +89,5 @@ class PairedAlignmentModel(nn.Module):
         return image_z, dna_z
 
 if __name__ == "__main__":
-    pass
+    print("This file holds the alignment and projection classes for the ForamFusion model, " \
+    "please run either 'Run_alignment_train.py' for training or 'Run_evaluation.py' for evaluation of a previously trained model.")

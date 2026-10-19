@@ -109,3 +109,7 @@ class BarcodeBERTEncoder(nn.Module):
         numerator = (hidden * mask).sum(dim=1)
         denominator = mask.sum(dim=1).clamp_min(1.0)
         return numerator / denominator
+
+if __name__ == "__main__":
+    print("This file holds the encoder classes for the ForamFusion model, please run either "
+    "'Run_alignment_train.py' for training or 'Run_evaluation.py' for evaluation of a previously trained model.")
