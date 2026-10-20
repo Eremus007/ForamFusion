@@ -58,7 +58,7 @@ def retrieval_metrics(image_z, dna_z, ks=(1, 5, 10)):                           
 
     return results                                                                              # return the results dictionary. 
 
-
+# python Run_evaluation.py --manifest ./data/manifest.csv --checkpoint ./alignment.pt
 def main():
     parser = argparse.ArgumentParser()                                                          # arguments from the command line.
     parser.add_argument("--manifest", required=True, help="Held-out paired CSV")    

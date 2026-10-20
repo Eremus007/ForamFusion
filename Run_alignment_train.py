@@ -8,7 +8,9 @@ import random
 from pathlib import Path
 
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
+
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
@@ -18,7 +20,7 @@ from B_encoders import (
     normalize_dna_sequence,
 )
 from C_model import PairedAlignmentModel
-from D_loss import symmetric_info_nce
+from D_loss import symmetric_info_nce, symmetric_accuracy
 
 
 class PairedSpecimenDataset(Dataset):
@@ -61,9 +63,9 @@ class PairedSpecimenDataset(Dataset):
         with Image.open(image_path) as image:                                                               # Open the image using Pillow.
             image = self.image_transform(image.convert("RGB"))                                              # Ensure the image has three color channels then does the preprocessing for the image encoder.
 
-        sequence = normalize_dna_sequence(row["dna_barcode"])                                                  # Takes the barcode sequence from the csv and runs it through the normalization function. 
+        sequence = normalize_dna_sequence(row["dna_barcode"])                                               # Takes the barcode sequence from the csv and runs it through the normalization function. 
         if not sequence:
-            raise ValueError(f"Empty DNA sequence for sample {row['sampleid']}")                           # Checks whether the sequence is empty after preprocessing. 
+            raise ValueError(f"Empty DNA sequence for sample {row['sampleid']}")                            # Checks whether the sequence is empty after preprocessing. 
         encoded = self.dna_tokenizer(                                                                       # Passes the sequence into the BarcodeBERT tokenizer.
             sequence,
             padding=True,                                                                                   # Pads sequences when nessesary so they are all the same length. 
@@ -71,7 +73,7 @@ class PairedSpecimenDataset(Dataset):
         )
         input_ids = torch.as_tensor(encoded["input_ids"]).reshape(-1).long()                                # Returns the token IDs after flattening it to a single list in 64-bit integer tensor format. 
         attention_mask = torch.as_tensor(encoded["attention_mask"]).reshape(-1).long()                      # Does something similar for the attention mask as above.
-        return image, input_ids, attention_mask, row["sampleid"]                                           # Returns everything needed from the requested sample. 
+        return image, input_ids, attention_mask, row["sampleid"]                                            # Returns everything needed from the requested sample. 
 
 
 def set_seed(seed: int):
@@ -121,12 +123,13 @@ def make_loader(
     )
 
 
-def train_one_epoch(model, loader, optimizer, device, temperature):
+def train_one_epoch(model, loader, optimizer, device, temperature, calc_accuracy):
     """This function performs one complete pass through the training dataset."""
     model.train()                                                                                           # Switch model to training mode.
 
     # Create counters starting at zero
     total_loss = 0.0                                                                                        # Accumulates the losses
+    total_accuracy = 0.0
     steps = 0                                                                                               # counts how many batches contributed to training.
 
     for images, input_ids, attention_mask, _sample_ids in loader:                                           # Iterate through batches
@@ -140,17 +143,31 @@ def train_one_epoch(model, loader, optimizer, device, temperature):
 
         image_z, dna_z = model(images, input_ids, attention_mask)                                           # Run the multimodal model and return shared embeddings space. 
         loss = symmetric_info_nce(image_z, dna_z, temperature=temperature)                                  # Calculate and store loss
+        if calc_accuracy:                                                                                   
+            accuracy = symmetric_accuracy(image_z, dna_z, temperature=temperature)                          # Calculate and store accuracy if specified in arguments
 
         optimizer.zero_grad(set_to_none=True)                                                               # Clear old gradients to prevent them from accumulating.
         loss.backward()                                                                                     # Backpropagation to calculate gradients
         optimizer.step()                                                                                    # Updates the parameters based on gradients. 
 
-        total_loss += loss.item()                                                                           # loss is a PyTorch Tensor, .item() makes it a normal python number.                               
+        total_loss += loss.item()                                                                           # loss is a PyTorch Tensor, .item() makes it a normal python number. 
+        if calc_accuracy:                                
+            total_accuracy += accuracy.item() 
         steps += 1                                                                                          # increment the batch counter.
 
     if steps == 0:                                                                                          # If every batch was skipped. 
         raise ValueError("No training batches had at least two specimens.")
-    return total_loss / steps                                                                               # Return average loss over all batches. 
+    if calc_accuracy:
+         return (total_loss / steps), (total_accuracy / steps)     
+    else:
+        return (total_loss / steps), None                                                                   # Return average loss over all batches. 
+
+def show_curve(values, title="Loss"):
+    plt.plot(values)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Training {title} per epoch')
+    plt.show()
 
 
 def main():
@@ -166,8 +183,13 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.07)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42069)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--calc_accuracy", dest="calc_accuracy", action="store_true")
+    group.add_argument("--no_calc_accuracy", dest="calc_accuracy", action="store_false")
+    parser.set_defaults(calc_accuracy=True)
     args = parser.parse_args()                                                                              # Creates an object containing all the command line arguments. 
 
+    print(args.calc_accuracy)
     set_seed(args.seed)                                                                                     # Call the helper function to set the random seed. 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")                                   # Use Cuda if GPU is available, otherwise use the CPU.
     model = build_model(args.dna_model, args.shared_dim).to(device)                                         # Build the model and move to selected device. 
@@ -179,18 +201,34 @@ def main():
         num_workers=args.num_workers,
     )
 
+    training_losses = []                                                                                    # Create empty lists to store training values per epoch
+    training_accuracy = []                                                                                  
+
     trainable_parameters = [p for p in model.parameters() if p.requires_grad]                               # Collects parameters that should actually be updated.
     optimizer = torch.optim.AdamW(trainable_parameters, lr=args.learning_rate)                              # Creates an AdamW optimizer using those trainable parameters.
 
     for epoch in range(1, args.epochs + 1):                                                                 # Training loop
-        loss = train_one_epoch(
+        loss, accuracy = train_one_epoch(
             model,
             loader,
             optimizer,
             device,
             temperature=args.temperature,
+            calc_accuracy=args.calc_accuracy,
         )
-        print(f"epoch={epoch:03d} train_loss={loss:.5f}")                                                   # Print progress. 
+        training_losses.append(loss)
+        if accuracy is not None:
+            training_accuracy.append(accuracy)
+
+        if accuracy is not None:
+            print(f"epoch={epoch:03d} train_loss={loss:.5f}, train_accuracy={accuracy:.5f}")                    # Print progress.
+        else:
+            print(f"epoch={epoch:03d} train_loss={loss:.5f}") 
+    show_curve(training_losses)
+    if accuracy is not None:
+        show_curve(training_accuracy, title="Accuracy")
+        
+
 
     output_path = Path(args.output)                                                                         # Turns the output filename into a path
     output_path.parent.mkdir(parents=True, exist_ok=True)                                                   # Create parent directory if it does not already exist. 
