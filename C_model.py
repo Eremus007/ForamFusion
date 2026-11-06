@@ -32,7 +32,7 @@ class ProjectionHead(nn.Module):
 class PairedAlignmentModel(nn.Module):
     """
     This Component is a model that learns to put the representation of an image and its corresponding DNA Sequence
-    closes together in the shared embedding space.
+    closer together in the shared embedding space.
     """
     def __init__(                                       # Constructor that initializes the inner components and values when the object is created.  
         self,

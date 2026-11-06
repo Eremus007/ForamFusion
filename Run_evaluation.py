@@ -36,7 +36,7 @@ def retrieval_metrics(image_z, dna_z, ks=(1, 5, 10)):                           
     its matching DNA embedding from the dataset, and whether 
     each DNA embedding can retrieve its matching image."""
     if image_z.shape != dna_z.shape:                                                            # Checks whether embedding tensors have identical shapes.
-        raise ValueError("Expected one matched image and DNA vector per sample.")
+        raise ValueError("Data not paired, image features have different shape from dna features.")
 
     similarity = image_z @ dna_z.T                                                              # Calculates the similarity between every image embedding and every DNA embedding. @ means matrix multiplication and .T transposes the dna tensor. 
     n = similarity.shape[0]                                                                     # Gets the number of rows in the similarity matrix, which is also the number of paired specimens. 

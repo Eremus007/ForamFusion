@@ -27,8 +27,8 @@ def symmetric_info_nce(
     """The loss tells how good each prediction was."""
     image_to_dna = FUNC_OP.cross_entropy(logits, targets)                                               # Given an image embedding, which dna embedding is its correct match? 
     dna_to_image = FUNC_OP.cross_entropy(logits.T, targets)                                             # Given a DNA embedding, which image embedding is its correct match? 
-    loss = 0.5 * (image_to_dna + dna_to_image) 
-    return loss                                                                                         # We take the average of the loss of both directions which is our actual loss.  
+    loss = 0.5 * (image_to_dna + dna_to_image)                                                          # We take the average of the loss of both directions which is our actual loss.  
+    return loss                                                                                         
 
 
 def symmetric_accuracy(

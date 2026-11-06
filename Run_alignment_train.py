@@ -27,13 +27,13 @@ class PairedSpecimenDataset(Dataset):
     """Takes Manifest CSV and turns it into paired training examples."""
     """One CSV row per specimen with a matched image and DNA sequence."""
 
-    REQUIRED_COLUMNS = {"processid", "sampleid", "species", "dna_barcode"}
+    CHECK_IF_EXIST = {"processid", "sampleid", "species", "dna_barcode"}
 
     def __init__(self, manifest_path: str | Path, image_transform, dna_tokenizer):
         self.manifest_path = Path(manifest_path).resolve()                                                  # Resolve CSV path into an absolute path.
-        with self.manifest_path.open("r", newline="", encoding="utf-8-sig") as f:                           # Open/Read CSV
-            reader = csv.DictReader(f)                                                                      # Turns each row of the CSV into a python dictionary.
-            missing = self.REQUIRED_COLUMNS - set(reader.fieldnames or [])                                  # Check missing columns.
+        with self.manifest_path.open("r", newline="", encoding="utf-8-sig") as file:                           # Open/Read CSV
+            reader = csv.DictReader(file)                                                                      # Turns each row of the CSV into a python dictionary.
+            missing = self.CHECK_IF_EXIST - set(reader.fieldnames or [])                                   # Check missing columns.
             if missing:
                 raise ValueError(f"Manifest is missing columns: {sorted(missing)}")
             self.rows = list(reader)
@@ -44,8 +44,7 @@ class PairedSpecimenDataset(Dataset):
         sample_ids = [row["sampleid"] for row in self.rows]                                                # Creates a list of sample IDs
         if len(set(sample_ids)) != len(sample_ids):                                                         # Check for and remove duplicates
             raise ValueError(
-                "This starter version expects one row per unique sample_id. "
-                "Handle multiple views with a multi-positive loss or aggregate them first."
+                "Ensure one row per unique sample_id"
             )
 
         self.image_transform = image_transform                                                              # Stores the image preprocessing function in the dataset object.
@@ -124,7 +123,7 @@ def make_loader(
 
 
 def train_one_epoch(model, loader, optimizer, device, temperature, calc_accuracy):
-    """This function performs one complete pass through the training dataset."""
+    """one complete pass through the training dataset.."""
     model.train()                                                                                           # Switch model to training mode.
 
     # Create counters starting at zero
@@ -163,6 +162,7 @@ def train_one_epoch(model, loader, optimizer, device, temperature, calc_accuracy
         return (total_loss / steps), None                                                                   # Return average loss over all batches. 
 
 def show_curve(values, title="Loss"):
+    """Plot the values given as an argument"""
     plt.plot(values)
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
@@ -202,7 +202,7 @@ def main():
     )
 
     training_losses = []                                                                                    # Create empty lists to store training values per epoch
-    training_accuracy = []                                                                                  
+    alignment_training_accuracy = []                                                                                  
 
     trainable_parameters = [p for p in model.parameters() if p.requires_grad]                               # Collects parameters that should actually be updated.
     optimizer = torch.optim.AdamW(trainable_parameters, lr=args.learning_rate)                              # Creates an AdamW optimizer using those trainable parameters.
@@ -218,7 +218,7 @@ def main():
         )
         training_losses.append(loss)
         if accuracy is not None:
-            training_accuracy.append(accuracy)
+            alignment_training_accuracy.append(accuracy)
 
         if accuracy is not None:
             print(f"epoch={epoch:03d} train_loss={loss:.5f}, train_accuracy={accuracy:.5f}")                    # Print progress.
@@ -226,7 +226,7 @@ def main():
             print(f"epoch={epoch:03d} train_loss={loss:.5f}") 
     show_curve(training_losses)
     if accuracy is not None:
-        show_curve(training_accuracy, title="Accuracy")
+        show_curve(alignment_training_accuracy, title="Accuracy")
         
 
 
