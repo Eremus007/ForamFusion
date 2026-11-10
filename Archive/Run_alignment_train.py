@@ -229,7 +229,6 @@ def main():
         show_curve(alignment_training_accuracy, title="Accuracy")
         
 
-
     output_path = Path(args.output)                                                                         # Turns the output filename into a path
     output_path.parent.mkdir(parents=True, exist_ok=True)                                                   # Create parent directory if it does not already exist. 
     # The pretrained encoders are frozen, so save only the learned heads.

@@ -36,7 +36,7 @@ def symmetric_accuracy(
     dna_z: torch.Tensor,                                                                                
     temperature: float = 0.07,                                                                          
 ) -> torch.Tensor:
-    """Calculate training accuracy for plotting."""                                 
+    """Calculate alignment training accuracy for plotting."""                                 
     if image_z.ndim != 2 or dna_z.ndim != 2:                                                            
         raise ValueError("Expected image_z and dna_z to have shape [batch, dim].")
     if image_z.shape != dna_z.shape:

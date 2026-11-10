@@ -3,6 +3,9 @@ from pathlib import Path
 import shutil
 import csv
 import os
+import csv
+import random
+from collections import defaultdict
 
 def get_sequences(file="./csv/BIOSCAN_5M_Insect_Dataset_metadata.csv"):
     with open(file, 'r') as inputfile:
@@ -70,6 +73,82 @@ def prepare_manifest(images_directory, manifest_file="./data/manifest.csv"):
                 
                 line = inputfile.readline().split(',')
             inputfile.close()
+
+def split_manifest(
+    input_path,
+    train_path,
+    val_path,
+    val_fraction=0.30,
+    seed=42,
+):
+    input_path = Path(input_path)
+
+    with input_path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+        required = {"sampleid", "species", "dna_barcode"}
+
+        missing = required - set(fieldnames)
+        if missing:
+            raise ValueError(f"Manifest is missing columns: {sorted(missing)}")
+
+        rows = list(reader)
+
+    # Keep complete examples that this image-plus-DNA classifier can use.
+    rows = [
+        row for row in rows
+        if row["species"].strip() and row["dna_barcode"].strip()
+    ]
+
+    sample_ids = [row["sampleid"] for row in rows]
+    if len(sample_ids) != len(set(sample_ids)):
+        raise ValueError("Manifest has duplicate sample IDs.")
+
+    groups = defaultdict(list)
+    for row in rows:
+        groups[row["species"].strip()].append(row)
+
+    rng = random.Random(seed)
+    train_rows = []
+    val_rows = []
+    singleton_species = 0
+
+    for species_rows in groups.values():
+        rng.shuffle(species_rows)
+
+        if len(species_rows) == 1:
+            # Keep singleton classes in training. They cannot be evaluated
+            # as known classes if placed in validation.
+            train_rows.extend(species_rows)
+            singleton_species += 1
+            continue
+
+        n_val = round(len(species_rows) * val_fraction)
+        n_val = max(1, min(n_val, len(species_rows) - 1))
+
+        val_rows.extend(species_rows[:n_val])
+        train_rows.extend(species_rows[n_val:])
+
+    rng.shuffle(train_rows)
+    rng.shuffle(val_rows)
+
+    for output_path, output_rows in (
+        (train_path, train_rows),
+        (val_path, val_rows),
+    ):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with output_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(output_rows)
+
+    print(f"Train: {len(train_rows)} specimens")
+    print(f"Validation: {len(val_rows)} specimens")
+    print(f"Singleton species kept in train: {singleton_species}")
+    print(f"Saved: {train_path}")
+    print(f"Saved: {val_path}")
     
 
 
@@ -86,8 +165,8 @@ if __name__ == "__main__":
     #     copy_image_to_directory(path, "./data/images")
 
     images_directory = Path.cwd().parent / "BIOSCAN"
-    prepare_manifest(images_directory)
-
+    # prepare_manifest(images_directory)
+    split_manifest(input_path="./data/manifest.csv", train_path="./data/train_manifest.csv", val_path="./data/val_manifest.csv")
 
     # convert_BIOSCAN_metadata(num_pairs=1000)
     print("completed")

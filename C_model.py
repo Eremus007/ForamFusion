@@ -58,13 +58,13 @@ class PairedAlignmentModel(nn.Module):
             shared_dim,
             projection_hidden_dim,
         )
-
+        
         if freeze_encoders:                             # Freezes the encoder weights if the boolean is set to True
             self.image_encoder.requires_grad_(False)
             self.dna_encoder.requires_grad_(False)
 
     def train(self, mode: bool = True):                 # Overwrite PyTorch's normal training method with our own.
-        super().train(mode)                             # Performs PyTorch's normal training behavior
+        super().train(mode)                             # Performs PyTorch's normal training behavior by inheriting it.
         if self.freeze_encoders:                        # Then force encoders into evaluation mode if the encoders are frozen. 
             self.image_encoder.eval()                   
             self.dna_encoder.eval()
@@ -87,6 +87,46 @@ class PairedAlignmentModel(nn.Module):
         image_z = self.image_projection(image_features) # transform the image representation into the shared space.
         dna_z = self.dna_projection(dna_features)       # transform the dna representation into the shared space.
         return image_z, dna_z
+
+
+class FusionHead(nn.Module):
+    """
+    This module fuses image_z and dna_z pair embeddings into a single Tensor representation per sample.
+    """
+    def __init__(
+        self,
+        shared_dim: int = 256,                          # Dimension size of the shared feature space
+        hidden_dim: int = 512,                          # Dimension size of the intermediate hidden layer of the projection head.
+    ):
+        super().__init__()                              # Initialize parent neural network module that the projection head inherits from.  
+        self.layers = nn.Sequential(                    # Create sequence of neural network layers. 
+            nn.Linear(2 * shared_dim, hidden_dim),      # Fully connected layer 
+            nn.GELU(),                                  # Activation function that uses Gaussian smoothing instead of a hard cut-off for negative weights.
+            nn.Dropout(0.2),                            # Set 20% of incoming data to zero, to prevent overfitting.
+        )
+
+    def forward(self, image_z, dna_z) -> torch.Tensor:
+        fused = self.layers(torch.cat([image_z, dna_z], dim=-1)) 
+        return fused                                             # Return a fused representation of each sample. 
+
+
+class ClassificationHead(nn.Module):
+    """
+    Takes a fused representation and predicts possible species from labels, then returns the raw logits.
+    """
+    def __init__(
+        self,
+        num_species: int,                               # Dimension size of the encoder output
+        hidden_dim: int = 512,                          # Dimension size of the intermediate hidden layer of the projection head.
+    ):
+        super().__init__()                              # Initialize parent neural network module that the projection head inherits from.  
+        self.layers = nn.Sequential(                    # Create sequence of neural network layers. 
+            nn.Linear(hidden_dim, num_species)
+        )
+
+    def forward(self, fused: torch.Tensor):
+        species_logits = self.layers(fused) 
+        return species_logits                           # Return logits in shape [batch_size, num_species]
 
 if __name__ == "__main__":
     print("This file holds the alignment and projection classes for the ForamFusion model, " \

@@ -7,3 +7,6 @@ BIOSCAN_5M_Insect_Dataset_metadata_MultiTypes
 .vscode/settings.json
 csv/BIOSCAN_5M_Insect_Dataset_metadata.csv
 alignment.pt
+data/train_manifest.csv
+data/val_manifest.csv
+data/manifest.csv

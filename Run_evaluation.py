@@ -6,106 +6,163 @@ import argparse
 from pathlib import Path
 
 import torch
+import torch.nn.functional as FUNC_OP
 
-from Run_alignment_train import build_model, make_loader
+from Run_classification_train import build_model, make_loader
 
 
-@torch.inference_mode()                                                                         # Disable gradient tracking (since we are evaluation and gradients are not updated.)
-def encode_manifest(model, loader, device): 
-    """reads in the input manifest."""                                                    
-    model.eval()                                                                                # Switches model to evaluation mode
-    image_vectors = []                                                                          # Image embeddings from each batch 
-    dna_vectors = []                                                                            # DNA embeddings from each batch 
-    sample_ids = []                                                                             # IDs identifying the specimens. 
+@torch.inference_mode()
+def evaluate_model(model, loader, device, num_classes):
+    model.eval()
 
-    for images, input_ids, attention_mask, ids in loader:                                       # Iterates over the batches returned by the data loader
-        images = images.to(device, non_blocking=True)                                           # Moves the three input tensors to the selected device
+    total_loss = 0.0                                                                            # Set the loss counter and the final 
+    all_labels = []
+    all_predictions = []
+    all_logits = []
+    sample_ids = []
+
+    for images, input_ids, attention_mask, labels, ids in loader:
+        images = images.to(device, non_blocking=True)
         input_ids = input_ids.to(device, non_blocking=True)
         attention_mask = attention_mask.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
-        image_z, dna_z = model(images, input_ids, attention_mask)                               # get image and dna embeddings in a shared embedding space from the model. 
-        image_vectors.append(image_z.cpu())                                                     # moves the image embeddings back to the CPU and appends it to the corresponding list.    
-        dna_vectors.append(dna_z.cpu())                                                         # moves the dna embeddings back to the CPU and appends it to the corresponding list.    
-        sample_ids.extend(list(ids))                                                            # Adds the specimen IDs from the current batch to the sample_ids
+        image_z, dna_z = model["alignment"](
+            images, input_ids, attention_mask
+        )
+        fused = model["fusion"](image_z, dna_z)
+        logits = model["classifier"](fused)
 
-    return sample_ids, torch.cat(image_vectors), torch.cat(dna_vectors)                         # Returns All specimen IDs and All image and DNA embeddings concatenated corresponding tensors.
+        # Sum batch losses so the final result can be averaged by specimen.
+        total_loss += FUNC_OP.cross_entropy(
+            logits, labels, reduction="sum"
+        ).item()
+
+        predictions = logits.argmax(dim=1)
+
+        all_labels.append(labels.cpu())
+        all_predictions.append(predictions.cpu())
+        all_logits.append(logits.cpu())
+        sample_ids.extend(list(ids))
+
+    if not all_labels:
+        raise ValueError("The evaluation manifest contains no samples.")
+
+    labels = torch.cat(all_labels)
+    predictions = torch.cat(all_predictions)
+    logits = torch.cat(all_logits)
+
+    metrics, confusion = classification_metrics(
+        labels, predictions, num_classes
+    )
+    metrics["loss"] = total_loss / len(labels)
+
+    return sample_ids, labels, predictions, logits, metrics, confusion
 
 
-def retrieval_metrics(image_z, dna_z, ks=(1, 5, 10)):                                           # image_z: image embeddings, dna_z: dna embeddings, ks: the values of k used to calculate recall. 
-    """This function measures if each image can retrieve 
-    its matching DNA embedding from the dataset, and whether 
-    each DNA embedding can retrieve its matching image."""
-    if image_z.shape != dna_z.shape:                                                            # Checks whether embedding tensors have identical shapes.
-        raise ValueError("Data not paired, image features have different shape from dna features.")
+def classification_metrics(labels, predictions, num_classes):
+    # Rows are true classes; columns are predicted classes.
+    confusion = torch.zeros(num_classes, num_classes, dtype=torch.long)
 
-    similarity = image_z @ dna_z.T                                                              # Calculates the similarity between every image embedding and every DNA embedding. @ means matrix multiplication and .T transposes the dna tensor. 
-    n = similarity.shape[0]                                                                     # Gets the number of rows in the similarity matrix, which is also the number of paired specimens. 
-    targets = torch.arange(n)                                                                   # creates the tensor of correct-match indices. 
-    results = {}                                                                                # Empty python dictionary to store the metrics.
+    for true_label, predicted_label in zip(labels, predictions):
+        confusion[true_label, predicted_label] += 1
 
-    for direction, scores in (
-        ("image_to_dna", similarity),                                                           # For loop evaluating Image-to-DNA retrieval.
-        ("dna_to_image", similarity.T),                                                         # For loop evaluating DNA-to-Image retrieval transposing the image swaps the query and candidate modalities.
-    ):
-        ranks = (scores.argsort(dim=1, descending=True) == targets[:, None])                    # Produces a boolean matrix indicating where the correct candidate appears in each ranked list.
-        rank_positions = ranks.float().argmax(dim=1) + 1                                        # Converts the boolean matrix into the numerical rank of each correct match. 
-        for k in ks:                                                                            # Loop through the requested values of k.
-            if n >= k:                                                                          # Only calculates recall if the datacet contains at least k candidates
-                results[f"{direction}_recall@{k}"] = (                                          # The main retrieval metrics by checking whether the correct match appears in the top k candidates. 
-                    rank_positions <= k
-                ).float().mean().item()
-        results[f"{direction}_median_rank"] = rank_positions.float().median().item()            # the median rank shows how far below rank 1 the correct matches tend to appear
+    support = confusion.sum(dim=1)
+    predicted_count = confusion.sum(dim=0)
+    true_positive = confusion.diag()
 
-    return results                                                                              # return the results dictionary. 
+    precision = true_positive.float() / predicted_count.clamp_min(1)
+    recall = true_positive.float() / support.clamp_min(1)
+    f1 = 2 * precision * recall / (precision + recall).clamp_min(1e-12)
 
-# python Run_evaluation.py --manifest ./data/manifest.csv --checkpoint ./alignment.pt
+    present_classes = support > 0
+
+    metrics = {
+        "accuracy": (true_positive.sum().float() / support.sum()).item(),
+        "macro_f1": f1[present_classes].mean().item(),
+    }
+    return metrics, confusion
+
+
 def main():
-    parser = argparse.ArgumentParser()                                                          # arguments from the command line.
-    parser.add_argument("--manifest", required=True, help="Held-out paired CSV")    
+    # python Run_evaluation.py --manifest ./data/val_manifest.csv --checkpoint ./classification.pt
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", required=True, help="Held-out labeled CSV")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--save-embeddings", default=None)
+    parser.add_argument("--save-predictions", default=None)
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")                       # specify device 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)            # load the saved checkpoint from the specified file. 
-    model = build_model(                                                                        # constructs a model using the configuration stored in the checkpoint.
-        checkpoint["dna_model_name"],
-        checkpoint["shared_dim"],                                                               # You can load stored arguments and objects from the checkpoint.
+    # This assumes the checkpoint contains the full ModuleDict state
+    # and the same model configuration used during training.
+    checkpoint = torch.load(
+        args.checkpoint,
+        map_location="cpu",
+        weights_only=True,
     )
-    model.image_projection.load_state_dict(checkpoint["image_projection"])                      # then you can load weights/states from certain objects from the checkpoint. 
-    model.dna_projection.load_state_dict(checkpoint["dna_projection"])
-    model = model.to(device).eval()                                                             # Moves the loaded parameters and buffers to the selected device (GPU or CPU) and then puts the model in evaluation mode.
 
-    loader = make_loader(                                                                       # Creates the batch data loader for the CSV file.
-        args.manifest,                                                                          # The CSV file to evaluate
-        model,                                                                                  # include the model so the object can access the barcodebert tokenizer and image preprocess function.  
+    species_to_idx = checkpoint["species_mapping"]
+
+    model = build_model(
+        dna_model_name=checkpoint["dna_model_name"],
+        shared_dim=checkpoint["shared_dim"],
+        hidden_dim=checkpoint["hidden_dim"],
+        num_species=len(species_to_idx),
+    )
+    model.load_state_dict(checkpoint["model_weights"])
+    model = model.to(device).eval()
+
+    loader = make_loader(
+        manifest_path = args.manifest,
+        model=model,
+        species_to_idx=species_to_idx,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
     )
-    sample_ids, image_z, dna_z = encode_manifest(model, loader, device)                         # Get embeddings and sample ideas from the above function.
-    metrics = retrieval_metrics(image_z, dna_z)                                                 # Calculate and retrieve metrics using the above function.
 
-    print(f"Evaluated {len(sample_ids)} paired specimens")
+    sample_ids, labels, predictions, logits, metrics, confusion = (
+        evaluate_model(
+            model,
+            loader,
+            device,
+            num_classes=len(species_to_idx),
+        )
+    )
+
+    idx_to_species = {
+        index: species
+        for species, index in species_to_idx.items()
+    }
+
+    print(f"Evaluated {len(sample_ids)} specimens")
     for name, value in metrics.items():
         print(f"{name}: {value:.4f}")
 
-    if args.save_embeddings:                                                                    # Save the embeddings if we specified to do so in the arguments.
-        output_path = Path(args.save_embeddings)
+    # print("\nConfusion matrix: rows=true species, columns=predicted species")
+    # print("Class order:", [idx_to_species[i] for i in range(len(species_to_idx))])
+    print(confusion)
+
+    if args.save_predictions:
+        output_path = Path(args.save_predictions)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
         torch.save(
             {
                 "sample_ids": sample_ids,
-                "image_embeddings": image_z,
-                "dna_embeddings": dna_z,
+                "true_labels": labels,
+                "predicted_labels": predictions,
+                "logits": logits,
+                "metrics": metrics,
+                "confusion_matrix": confusion,
+                "species_mapping": species_to_idx,
             },
             output_path,
         )
-        print(f"Saved embeddings to {output_path.resolve()}")
-
+        print(f"Saved predictions to {output_path.resolve()}")
 
 if __name__ == "__main__":
     main()
