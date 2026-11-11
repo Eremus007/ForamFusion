@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as FUNC_OP
 
 from Run_classification_train import build_model, make_loader
+from E_visualisation import show_umap_features
 
 
 @torch.inference_mode()
@@ -83,15 +84,48 @@ def classification_metrics(labels, predictions, num_classes):
     }
     return metrics, confusion
 
+def extract_embeddings(model, loader, device):
+    model.eval()
+
+    image_parts = []
+    dna_parts = []
+    fused_parts = []
+    label_parts = []
+    sample_ids = []
+
+    for images, input_ids, attention_mask, labels, ids in loader:
+        images = images.to(device, non_blocking=True)
+        input_ids = input_ids.to(device, non_blocking=True)
+        attention_mask = attention_mask.to(device, non_blocking=True)
+
+        image_z, dna_z = model["alignment"](
+            images, input_ids, attention_mask
+        )
+        fused_z = model["fusion"](image_z, dna_z)
+
+        image_parts.append(image_z.cpu())
+        dna_parts.append(dna_z.cpu())
+        fused_parts.append(fused_z.cpu())
+        label_parts.append(labels.cpu())
+        sample_ids.extend(list(ids))
+
+    return {
+        "sample_ids": sample_ids,
+        "labels": torch.cat(label_parts),
+        "image_embeddings": torch.cat(image_parts),
+        "dna_embeddings": torch.cat(dna_parts),
+        "fused_embeddings": torch.cat(fused_parts),
+    }
 
 def main():
-    # python Run_evaluation.py --manifest ./data/val_manifest.csv --checkpoint ./classification.pt
+    # python Run_evaluation.py --manifest ./data/val_manifest.csv --checkpoint ./classification.pt --visualize True
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, help="Held-out labeled CSV")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--save-predictions", default=None)
+    parser.add_argument("--visualize", default=False)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -103,7 +137,7 @@ def main():
         map_location="cpu",
         weights_only=True,
     )
-
+    
     species_to_idx = checkpoint["species_mapping"]
 
     model = build_model(
@@ -124,6 +158,11 @@ def main():
         num_workers=args.num_workers,
     )
 
+    if args.visualize:
+        embeddings = extract_embeddings(model, loader, device)
+        show_umap_features({"DNA": embeddings["dna_embeddings"], "Image": embeddings["image_embeddings"]}, embeddings["labels"])
+        show_umap_features({"FUSED": embeddings["fused_embeddings"]}, embeddings["labels"])
+
     sample_ids, labels, predictions, logits, metrics, confusion = (
         evaluate_model(
             model,
@@ -133,10 +172,10 @@ def main():
         )
     )
 
-    idx_to_species = {
-        index: species
-        for species, index in species_to_idx.items()
-    }
+    # idx_to_species = {
+    #     index: species
+    #     for species, index in species_to_idx.items()
+    # }
 
     print(f"Evaluated {len(sample_ids)} specimens")
     for name, value in metrics.items():

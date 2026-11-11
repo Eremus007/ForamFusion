@@ -10,3 +10,5 @@ alignment.pt
 data/train_manifest.csv
 data/val_manifest.csv
 data/manifest.csv
+vector_space.html
+data/manifest.csv

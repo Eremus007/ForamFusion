@@ -24,7 +24,7 @@ from B_encoders import (
 )
 from C_model import PairedAlignmentModel, FusionHead, ClassificationHead
 from D_loss import symmetric_info_nce, symmetric_accuracy
-
+from E_visualisation import show_curve
 
 class PairedSpecimenDataset(Dataset):
     """Takes Manifest CSV and turns it into paired training examples."""
@@ -177,9 +177,7 @@ def train_one_epoch(model, loader, optimizer, device):
         attention_mask = attention_mask.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        image_z, dna_z = model["alignment"](
-            images, input_ids, attention_mask
-        )
+        image_z, dna_z = model["alignment"](images, input_ids, attention_mask)
         fused = model["fusion"](image_z, dna_z)
         logits = model["classifier"](fused)
 
@@ -194,15 +192,6 @@ def train_one_epoch(model, loader, optimizer, device):
         total_samples += labels.size(0)
 
     return total_loss / len(loader), total_correct / total_samples                                          # Return average loss and accuracy for this epoch.
-
-
-def show_curve(values, title="Loss"):
-    """Plot the values given as an argument"""
-    plt.plot(values)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title(f'Training {title} per epoch')
-    plt.show()
 
 
 def main():
