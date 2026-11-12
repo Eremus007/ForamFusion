@@ -163,9 +163,40 @@ def make_loader(
         drop_last=False,                                                                                    # Final batch is kept even if it is smaller than the requested batch size.
     )
 
-def train_one_epoch(model, loader, optimizer, device):
+def train_alignment_one_epoch(alignment, loader, optimizer, device, temperature):
+    alignment.train()
+    total_loss = 0.0
+    steps = 0
+
+    for images, input_ids, attention_mask, _labels, _sample_ids in loader:
+        if images.shape[0] < 2:
+            continue
+
+        images = images.to(device, non_blocking=True)
+        input_ids = input_ids.to(device, non_blocking=True)
+        attention_mask = attention_mask.to(device, non_blocking=True)
+
+        image_z, dna_z = alignment(images, input_ids, attention_mask)
+        loss = symmetric_info_nce(image_z, dna_z, temperature=temperature)
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        steps += 1
+
+    if steps == 0:
+        raise ValueError("No training batches had at least two specimens.")
+
+    return total_loss / steps                                                                        # Return average loss over all batches. 
+
+def train_classifier_one_epoch(model, loader, optimizer, device, freeze_alignment=True):
     """one complete pass through the training dataset.."""
     model.train()
+
+    if freeze_alignment:
+        model["alignment"].eval()
 
     total_loss = 0.0
     total_correct = 0
@@ -187,18 +218,18 @@ def train_one_epoch(model, loader, optimizer, device):
         loss.backward()
         optimizer.step()
 
-        total_loss += loss.item()
+        total_loss += loss.item() * labels.size(0)
         total_correct += (logits.argmax(dim=1) == labels).sum().item()
         total_samples += labels.size(0)
 
-    return total_loss / len(loader), total_correct / total_samples                                          # Return average loss and accuracy for this epoch.
+    return total_loss / total_samples, total_correct / total_samples                                         # Return average loss and accuracy for this epoch.
 
 
 def main():
-    ### python run_classification_train.py --train-csv ./data/train_manifest.csv --output ./classification.pt
+    ### python run_classification_train.py --train-csv ./data/train_manifest.csv --output ./classification.pt --train-alignment
     parser = argparse.ArgumentParser()                                                                      # Arguments coming from the command line.
     parser.add_argument("--train-csv", required=True)
-    parser.add_argument("--output", default="alignment.pt")
+    parser.add_argument("--output", default="classification.pt")
     parser.add_argument("--dna-model", default="bioscan-ml/BarcodeBERT")
     parser.add_argument("--shared-dim", type=int, default=256)
     parser.add_argument("--hidden-dim", type=int, default=512)
@@ -207,7 +238,8 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42069)
-    
+    parser.add_argument("--train-alignment", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--temperature", type=float, default=0.07)
     args = parser.parse_args()                                                                              # Creates an object containing all the command line arguments. 
 
     set_seed(args.seed)                                                                                     # Call the helper function to set the random seed. 
@@ -230,31 +262,60 @@ def main():
         species_to_idx=species_to_idx,
     )
 
-    training_losses = []                                                                                    # Create empty lists to store training values per epoch
-    alignment_training_accuracy = []                                                                                  
+    alignment_training_losses = []  
+    classification_training_losses = []                                                                                    # Create empty lists to store training values per epoch
+    classification_training_accuracies = []                                                                                  
 
-    trainable_parameters = [p for p in model.parameters() if p.requires_grad]                               # Collects parameters that should actually be updated.
-    optimizer = torch.optim.AdamW(trainable_parameters, lr=args.learning_rate)                              # Creates an AdamW optimizer using those trainable parameters.
+    if args.train_alignment:
+        print("Training Alignment Model...")
+        alignment = model["alignment"]
+        alignment_optimizer = torch.optim.AdamW(
+            (p for p in alignment.parameters() if p.requires_grad), lr=args.learning_rate)
 
+        for epoch in range(1, args.epochs + 1):
+            loss = train_alignment_one_epoch(
+                alignment,
+                loader,
+                alignment_optimizer,
+                device,
+                temperature=args.temperature,
+            )
+            alignment_training_losses.append(loss)
+            print(f"epoch={epoch:03d} train_loss={loss:.5f}") 
 
-    for epoch in range(1, args.epochs + 1):                                                                 # Training loop
-        loss, accuracy = train_one_epoch(
+        model["alignment"].requires_grad_(False)                                                            # Freeze the pretrained alignment features for classifier training.
+        freeze_alignment = True
+
+        classifier_parameters = (
+            list(model["fusion"].parameters())
+            + list(model["classifier"].parameters())
+        )
+    else:
+        freeze_alignment = False
+        classifier_parameters = [p for p in model.parameters() if p.requires_grad]                          # Train alignment, fusion, and classifier together.
+
+    
+    print("Training Classification Model...")
+    classifier_optimizer = torch.optim.AdamW(classifier_parameters, lr=args.learning_rate)
+    for epoch in range(1, args.epochs + 1):                                                                 # Classification Training loop
+        loss, accuracy = train_classifier_one_epoch(
             model,
             loader,
-            optimizer,
+            classifier_optimizer,
             device,
+            freeze_alignment,
         )
-        training_losses.append(loss)
+        classification_training_losses.append(loss)
         if accuracy is not None:
-            alignment_training_accuracy.append(accuracy)
+            classification_training_accuracies.append(accuracy)
 
         if accuracy is not None:
             print(f"epoch={epoch:03d} train_loss={loss:.5f}, train_accuracy={accuracy:.5f}")                    # Print progress.
         else:
             print(f"epoch={epoch:03d} train_loss={loss:.5f}") 
-    show_curve(training_losses)
+    show_curve(classification_training_losses)
     if accuracy is not None:
-        show_curve(alignment_training_accuracy, title="Accuracy")
+        show_curve(classification_training_accuracies, title="Accuracy")
         
     output_path = Path(args.output)                                                                         # Turns the output filename into a path
     output_path.parent.mkdir(parents=True, exist_ok=True)                                                   # Create parent directory if it does not already exist. 
