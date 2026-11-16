@@ -126,15 +126,11 @@ def symmetric_accuracy(
     accuracy = 0.5 * (image_to_dna_acc + dna_to_image_acc)
     return accuracy                                                                                     # We take the average of the loss of both directions which is our actual alignment accuracy.  
 
-def distance_prediction_loss(predicted_distance_value: float, query_seq: str, target_seq: str) -> torch.Tensor:
-    """Loss for phylogenetic distance, returns the difference between predicted value and """          
-
-    aligned_query, aligned_target = align_sequences(query_seq, target_seq)
-    cleaned_query, cleaned_target = preprocess_sequences(aligned_query, aligned_target)
-    calculated_distance = kimura_distance(cleaned_query, cleaned_target) 
-                                 
-    loss = abs(predicted_distance_value - calculated_distance)                                                  
-    return loss       
+def distance_prediction_loss(predicted_distance: float, calculated_distance: float) -> torch.Tensor:
+    """Loss for phylogenetic distance, returns the difference between predicted value and """
+    target_distance = calculated_distance.to(device=predicted_distance.device, dtype=predicted_distance.dtype).reshape_as(predicted_distance)
+    loss = FUNC_OP.smooth_l1_loss(predicted_distance, target_distance)                                                   
+    return loss
 
 if __name__ == "__main__":
     print("This file holds the function for the infoNCE loss, please run either 'Run_alignment_train.py' for training or 'Run_evaluation.py' for evaluation of a previously trained model.")

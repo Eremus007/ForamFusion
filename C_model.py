@@ -104,6 +104,7 @@ class FusionHead(nn.Module):
             nn.GELU(),                                  # Activation function that uses Gaussian smoothing instead of a hard cut-off for negative weights.
             nn.Dropout(0.2),                            # Set 20% of incoming data to zero, to prevent overfitting.
         )
+        self.output_dim = hidden_dim
 
     def forward(self, image_z, dna_z) -> torch.Tensor:
         fused = self.layers(torch.cat([image_z, dna_z], dim=-1)) 
@@ -127,6 +128,29 @@ class ClassificationHead(nn.Module):
     def forward(self, fused: torch.Tensor):
         species_logits = self.layers(fused) 
         return species_logits                           # Return logits in shape [batch_size, num_species]
+
+class DistanceHead(nn.Module):
+    """
+    Predict a distance between two specimen embeddings using Neural regression.
+    """
+
+    def __init__(self, fused_dim: int, hidden_dim: int = 512):
+        super().__init__()
+
+        self.layers = nn.Sequential(
+            nn.Linear(2 * fused_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Softplus(),
+        )
+
+    def forward(self, fused_a: torch.Tensor, fused_b: torch.Tensor) -> torch.Tensor:
+        pair_features = torch.cat((torch.abs(fused_a - fused_b), fused_a * fused_b), dim=-1)
+        return self.layers(pair_features).squeeze(-1)
+
+
 
 if __name__ == "__main__":
     print("This file holds the alignment and projection classes for the ForamFusion model, " \

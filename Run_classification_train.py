@@ -238,7 +238,7 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42069)
-    parser.add_argument("--train-alignment", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--train-alignment", action=argparse.BooleanOptionalAction, default=True)           # specify "--no-train-alignment" to not train alignment
     parser.add_argument("--temperature", type=float, default=0.07)
     args = parser.parse_args()                                                                              # Creates an object containing all the command line arguments. 
 

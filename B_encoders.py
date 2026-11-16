@@ -7,9 +7,9 @@ from transformers import AutoModel, AutoTokenizer
 
 def normalize_dna_sequence(sequence: str) -> str:
     """Normalize a sequence body; do not pass FASTA headers."""
-    sequence = "".join(sequence.split()).upper().replace("U", "T")
+    sequence = "".join(sequence.split()).upper().replace("U", "T")                      # remove empty space, ensure all characters are uppercase and ensure input RNA sequences are read as DNA. 
     # Keep the input alphabet compatible with BarcodeBERT.
-    return "".join(base if base in "ACGT" else "N" for base in sequence)
+    return "".join(base if base in "ACGT" else "N" for base in sequence)            
 
 
 class ResNet50Encoder(nn.Module):
